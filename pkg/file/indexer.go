@@ -38,37 +38,6 @@ func IndexDirectory(dir string) ([]FileMeta, error) {
 	return files, err
 }
 
-// func indexFile(path string) (FileMeta, error) {
-// 	f, err := os.Open(path)
-
-// 	if err != nil {
-// 		return FileMeta{}, err
-// 	}
-// 	defer f.Close()
-
-// 	h := sha256.New()
-// 	var chunkHashes []string
-// 	chunks, err := Chunk(f)
-// 	if err != nil {
-// 		return FileMeta{}, err
-// 	}
-
-// 	for _, c := range chunks {
-// 		ch := sha256.Sum256(c)
-// 		chunkHashes = append(chunkHashes, hex.EncodeToString(ch[:]))
-// 		h.Write(c)
-// 	}
-
-// 	info, _ := f.Stat()
-// 	return FileMeta{
-// 		Name:      info.Name(),
-// 		Path:      path,
-// 		Size:      info.Size(),
-// 		FileHash:  hex.EncodeToString(h.Sum(nil)),
-// 		ChunkHash: chunkHashes,
-// 	}, nil
-// }
-
 func indexFile(path string, info os.FileInfo) (FileMeta, error) {
 	f, err := os.Open(path)
 	if err != nil {
