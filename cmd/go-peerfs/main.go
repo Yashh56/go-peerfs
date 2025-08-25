@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Yashh56/go-peerfs/pkg/download"
 	"github.com/Yashh56/go-peerfs/pkg/file"
 	"github.com/Yashh56/go-peerfs/pkg/p2p"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -55,7 +56,7 @@ func main() {
 			return
 		}
 
-		searchQuery := "document"
+		searchQuery := "large-test-file"
 		fmt.Printf("\n--- Searching for '%s' on peer %s ---\n", searchQuery, targetPeer)
 
 		results, err := p2p.RequestSearch(ctx, host, targetPeer, searchQuery)
@@ -70,17 +71,32 @@ func main() {
 		}
 
 		fileToDownload := results[0]
-		fmt.Printf("Found file '%s' with hash '%s'. Preparing to download.\n", fileToDownload.Name, fileToDownload.FileHash)
+
+		var providers []peer.ID
+
+		for _, p := range host.Peerstore().Peers() {
+			if p != host.ID() {
+				providers = append(providers, p)
+			}
+		}
+
+		if len(providers) == 0 {
+			fmt.Println("No Providers Found for The File.")
+			return
+		}
+
+		fmt.Printf("Found %d Providers for file %s. Starting multi-peer download.\n", len(providers), fileToDownload.Name)
 
 		savePath := filepath.Join("./downloads", fileToDownload.Name)
 
-		err = p2p.RequestFile(ctx, host, targetPeer, fileToDownload, savePath)
+		dlManager := download.NewDownloadManager(host)
+		err = dlManager.DownloadFile(ctx, fileToDownload, providers, savePath)
+
 		if err != nil {
-			log.Printf("File download failed: %v", err)
+			log.Printf("Multi-peer download failed: %v", err)
 		} else {
-			fmt.Printf("File download succeeded!\n")
+			fmt.Printf("Multi-Peer Download Succeeded!\n")
 		}
-		fmt.Printf("--- Example finished ---\n")
 	}()
 
 	select {}

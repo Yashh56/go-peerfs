@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/Yashh56/go-peerfs/pkg/file"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -24,48 +26,71 @@ func SetStreamHandler(h host.Host, files []file.FileMeta) {
 }
 
 func fileStreamHandler(s network.Stream) {
-	fmt.Printf("New Incoming Stream from %s\n", s.Conn().RemotePeer())
+	fmt.Printf("New incoming stream from %s\n", s.Conn().RemotePeer())
 	defer s.Close()
 
 	reader := bufio.NewReader(s)
 
-	fileHash, err := reader.ReadString('\n')
+	requestString, err := reader.ReadString('\n')
 	if err != nil {
 		fmt.Printf("Error reading from stream: %v\n", err)
 		return
 	}
 
-	fileHash = fileHash[:len(fileHash)-1]
+	requestString = strings.TrimSpace(requestString)
+	parts := strings.Split(requestString, ":")
+	if len(parts) != 2 {
+		fmt.Println("Invalid request format. Expected 'filehash:chunkIndex'")
+		return
+	}
 
-	fmt.Printf("Peer %s is requesting file with hash: %s\n", s.Conn().RemotePeer(), fileHash)
+	fileHash, chunkIndexStr := parts[0], parts[1]
+
+	chunkIndex, err := strconv.Atoi(chunkIndexStr)
+
+	if err != nil {
+		fmt.Printf("Invalid chunk index: %v\n", err)
+		return
+	}
+	fmt.Printf("Peer %s is requesting chunk %d for file %s\n", s.Conn().RemotePeer(), chunkIndex, fileHash)
 
 	var requestedFile *file.FileMeta
+
 	for _, f := range fileIndex {
 		if f.FileHash == fileHash {
 			requestedFile = &f
 			break
 		}
 	}
+
 	if requestedFile == nil {
-		fmt.Printf("File with hash %s not found. \n", fileHash)
+		fmt.Printf("File with hash %s not found.\n", fileHash)
 		return
 	}
-
 	f, err := os.Open(requestedFile.Path)
 	if err != nil {
-		fmt.Printf("Error opening File %s: %v\n", requestedFile.Path, err)
+		fmt.Printf("Error opening file %s: %v\n", requestedFile.Path, err)
 		return
 	}
+
 	defer f.Close()
 
-	fmt.Printf("Sending File %s to Peer %s\n", requestedFile.Name, s.Conn().RemotePeer())
+	offset := int64(chunkIndex) * file.ChunkSize
+	f.Seek(offset, 0)
 
-	bytesSent, err := io.Copy(s, f)
+	chunkReader := io.LimitedReader{
+		R: f,
+		N: file.ChunkSize,
+	}
+	bytesSent, err := io.Copy(s, &chunkReader)
+
 	if err != nil {
-		fmt.Printf("Error Sending File :%v,\n", err)
+		fmt.Printf("Error Sending Chunk: %v\n", err)
 		return
 	}
-	fmt.Printf("Finished Sending File. Sent %d bytes.\n", bytesSent)
+
+	fmt.Printf("Finished sending chunk %d. Sent %d bytes.\n", chunkIndex, bytesSent)
+
 }
 
 func RequestFile(ctx context.Context, h host.Host, peerID peer.ID, meta file.FileMeta, savePath string) error {
@@ -101,4 +126,28 @@ func RequestFile(ctx context.Context, h host.Host, peerID peer.ID, meta file.Fil
 	fmt.Printf("File Download Complete! Received %d bytes. \n", bytesReceived)
 
 	return nil
+}
+
+func RequestChunk(ctx context.Context, h host.Host, peerID peer.ID, fileHash string, chunkIndex int) ([]byte, error) {
+	request := fmt.Sprintf("%s:%d\n", fileHash, chunkIndex)
+	s, err := h.NewStream(ctx, peerID, FileTransferProtocol)
+	if err != nil {
+		return nil, err
+	}
+
+	defer s.Close()
+
+	_, err = s.Write([]byte(request))
+
+	if err != nil {
+		return nil, err
+	}
+
+	s.CloseWrite()
+	chunkData, err := io.ReadAll(s)
+	if err != nil {
+		return nil, err
+	}
+	return chunkData, nil
+
 }

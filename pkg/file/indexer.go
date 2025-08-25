@@ -9,6 +9,8 @@ import (
 	"github.com/minio/sha256-simd"
 )
 
+const ChunkSize = 1024 * 1024
+
 type FileMeta struct {
 	Name      string
 	Path      string
