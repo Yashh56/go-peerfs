@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
 
 	"github.com/Yashh56/go-peerfs/pkg/file"
 	"github.com/Yashh56/go-peerfs/pkg/p2p"
@@ -33,100 +32,79 @@ func (dm *DownloadManager) DownloadFile(ctx context.Context, meta file.FileMeta,
 		return fmt.Errorf("metadata contains no chunk hashes, cannot download")
 	}
 
-	downloadedChunks := make([][]byte, numChunks)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for i := 0; i < numChunks; i++ {
-		wg.Add(1)
-		provider := providers[i%len(providers)]
-		chunkIndex := i
-
-		go func(p peer.ID, index int) {
-			defer wg.Done()
-			var chunkData []byte
-			var err error
-
-			if p == dm.Host.ID() {
-				fmt.Printf("Reading chunk %d locally\n", index)
-				var localMeta *file.FileMeta
-				for _, f := range dm.LocalFiles {
-					if f.FileHash == meta.FileHash {
-						localMeta = &f
-						break
-					}
-				}
-				if localMeta == nil {
-					err = fmt.Errorf("Could Not Find Local File Metadata for hash %s", meta.FileHash)
-				} else {
-
-					chunkData, err = readChunkFromFile(localMeta.Path, index)
-				}
-			} else {
-				fmt.Printf("Requesting chunk %d from remote peer %s\n", index, p)
-				chunkData, err = p2p.RequestChunk(ctx, dm.Host, p, meta.FileHash, index)
-			}
-
-			if err != nil {
-				fmt.Printf("Error getting chunk %d from peer %s: %v\n", index, p, err)
-				return
-			}
-
-			expectedHash := meta.ChunkHash[index]
-			hasher := sha256.New()
-			hasher.Write(chunkData)
-			receivedHash := hex.EncodeToString(hasher.Sum(nil))
-
-			if receivedHash != expectedHash {
-				fmt.Printf("Chunk %d verification failed!\n", index)
-				return
-			}
-
-			mu.Lock()
-			downloadedChunks[index] = chunkData
-			mu.Unlock()
-			fmt.Printf("Successfully got and verified chunk %d\n", index)
-		}(provider, chunkIndex)
-	}
-
-	wg.Wait()
-	fmt.Println("All chunk operations complete. Reassembling file...")
-
 	f, err := os.Create(savePath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
+	fmt.Printf("Starting sequential download of %d chunks...\n", numChunks)
+
 	for i := 0; i < numChunks; i++ {
-		if downloadedChunks[i] == nil {
-			return fmt.Errorf("download failed: missing chunk %d", i)
+		provider := providers[i%len(providers)]
+		chunkIndex := i
+		var chunkData []byte
+		var err error
+
+		if provider == dm.Host.ID() {
+			fmt.Printf("Reading chunk %d from local disk...\n", chunkIndex)
+			chunkData, err = dm.readLocalChunk(meta.FileHash, chunkIndex)
+		} else {
+			fmt.Printf("Requesting chunk %d from remote peer %s...\n", chunkIndex, provider)
+			chunkData, err = p2p.RequestChunk(ctx, dm.Host, provider, meta.FileHash, chunkIndex)
 		}
-		_, err := f.Write(downloadedChunks[i])
+
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to get chunk %d: %w", chunkIndex, err)
 		}
+
+		expectedHash := meta.ChunkHash[chunkIndex]
+		hasher := sha256.New()
+		hasher.Write(chunkData)
+		receivedHash := hex.EncodeToString(hasher.Sum(nil))
+
+		if receivedHash != expectedHash {
+			return fmt.Errorf("chunk %d verification failed! Corrupted data", chunkIndex)
+		}
+
+		if _, err := f.Write(chunkData); err != nil {
+			return fmt.Errorf("failed to write chunk %d to file: %w", chunkIndex, err)
+		}
+		fmt.Printf("Successfully downloaded and wrote chunk %d\n", chunkIndex)
 	}
-	fmt.Println("File reassembled successfully!")
+
+	fmt.Println("File download complete!")
 	return nil
 }
 
-func readChunkFromFile(filePath string, chunkIndex int) ([]byte, error) {
-	f, err := os.Open(filePath)
+func (dm *DownloadManager) readLocalChunk(fileHash string, chunkIndex int) ([]byte, error) {
+	var localMeta *file.FileMeta
+	for _, f := range dm.LocalFiles {
+		if f.FileHash == fileHash {
+			localMeta = &f
+			break
+		}
+	}
+	if localMeta == nil {
+		return nil, fmt.Errorf("could not find local file metadata for hash %s", fileHash)
+	}
+
+	f, err := os.Open(localMeta.Path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	offSet := int64(chunkIndex) * file.ChunkSize
-	_, err = f.Seek(offSet, 0)
-	if err != nil {
+	offset := int64(chunkIndex) * file.ChunkSize
+	if _, err := f.Seek(offset, 0); err != nil {
 		return nil, err
 	}
+
 	buf := make([]byte, file.ChunkSize)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	return buf[:n], err
+
+	return buf[:n], nil
 }

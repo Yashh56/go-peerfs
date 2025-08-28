@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Yashh56/go-peerfs/pkg/file"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -130,7 +131,9 @@ func RequestFile(ctx context.Context, h host.Host, peerID peer.ID, meta file.Fil
 
 func RequestChunk(ctx context.Context, h host.Host, peerID peer.ID, fileHash string, chunkIndex int) ([]byte, error) {
 	request := fmt.Sprintf("%s:%d\n", fileHash, chunkIndex)
-	s, err := h.NewStream(ctx, peerID, FileTransferProtocol)
+	streamCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	s, err := h.NewStream(streamCtx, peerID, FileTransferProtocol)
 	if err != nil {
 		return nil, err
 	}
