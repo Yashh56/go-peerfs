@@ -239,6 +239,15 @@ go-peerfs/
 
 ---
 
+## 📈 Benchmarks
+
+![benchmark Tests](./public/benchmarks.png)
+
+
+
+
+---
+
 ## 🤝 Contributing
 
 We welcome contributions from the community! Here's how you can help:

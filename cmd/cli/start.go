@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"time"
 
+	"github.com/Yashh56/go-peerfs/pkg/benchmark"
 	"github.com/Yashh56/go-peerfs/pkg/download"
 	"github.com/Yashh56/go-peerfs/pkg/file"
 	"github.com/Yashh56/go-peerfs/pkg/p2p"
@@ -27,10 +29,16 @@ var startCmd = &cobra.Command{
 		if err != nil {
 			log.Fatalf("Failed to create host: %v", err)
 		}
+		fmt.Println("Starting file indexing...")
+		startTime := time.Now()
 		sharedFiles, err := file.IndexDirectory("./shared")
 		if err != nil {
 			log.Fatalf("Failed to index Directory: %v", err)
 		}
+		duration := time.Since(startTime) // Calculate duration
+		benchmark.LogResult("File Indexing", duration, fmt.Sprintf("%d files indexed", len(sharedFiles)))
+		fmt.Printf("File indexing completed in: %s\n", duration)
+
 		fmt.Printf("Sharing %d files.\n", len(sharedFiles))
 
 		p2p.SetStreamHandler(p2pHost, sharedFiles)
@@ -157,9 +165,64 @@ func startAPIServer(h host.Host, localFiles []file.FileMeta) {
 		fmt.Fprintf(w, "Download successful! File saved to %s", savePath)
 	}
 
+	handleBenchmarkTransfer := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		type DownloadRequest struct {
+			Meta      file.FileMeta `json:"meta"`
+			Providers []string      `json:"providers"`
+		}
+
+		var req DownloadRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		// --- FIX: DECLARE AND INITIALIZE THE MISSING VARIABLES ---
+		var providerIDs []peer.ID
+		for _, pStr := range req.Providers {
+			id, err := peer.Decode(pStr)
+			if err != nil {
+				http.Error(w, "Invalid peer ID", http.StatusBadRequest)
+				return
+			}
+			providerIDs = append(providerIDs, id)
+		}
+		// For a benchmark, we'll save to a temporary file.
+		savePath := filepath.Join("./downloads", "benchmark-"+req.Meta.Name)
+		// --- END OF FIX ---
+
+		// --- BENCHMARK LOGIC ---
+		startTime := time.Now()
+		dlManager := download.NewDownloadManager(h, localFiles)
+		err := dlManager.DownloadFile(r.Context(), req.Meta, providerIDs, savePath) // This line now works correctly
+		duration := time.Since(startTime)
+
+		if err != nil {
+			msg := fmt.Sprintf("Download failed: %v", err)
+			benchmark.LogResult("File Transfer", duration, "Result: FAILED - "+msg)
+			http.Error(w, msg, http.StatusInternalServerError)
+			return
+		}
+
+		// Calculate speed and log the successful result
+		fileSizeMB := float64(req.Meta.Size) / (1024 * 1024)
+		transferSpeed := fileSizeMB / duration.Seconds()
+		notes := fmt.Sprintf("File: %s, Size: %.2f MB, Speed: %.2f MB/s", req.Meta.Name, fileSizeMB, transferSpeed)
+		benchmark.LogResult("File Transfer", duration, "Result: SUCCESS - "+notes)
+
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "Benchmark complete. Results logged to benchmarks.txt.\n%s", notes)
+	}
+
 	http.HandleFunc("/search", handleSearch)
 	http.HandleFunc("/fileMeta", handleFileMeta)
 	http.HandleFunc("/download", handleDownload)
+	http.HandleFunc("/benchmark/transfer", handleBenchmarkTransfer) // Register the new handler
 
 	listenAddr := fmt.Sprintf(":%d", apiPort)
 	fmt.Printf("API Server listening on http://localhost%s\n", listenAddr)
