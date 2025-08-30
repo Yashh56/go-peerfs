@@ -255,7 +255,7 @@ We welcome contributions from the community! Here's how you can help:
 ### **Development Setup**
 ```bash
 # Fork and clone
-git clone https://github.com/your-username/go-peerfs.git
+git clone https://github.com/Yashh56/go-peerfs.git
 cd go-peerfs
 
 # Install dependencies
